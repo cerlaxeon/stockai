@@ -26,8 +26,8 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── Config — set these as environment variables on Railway ─────────────────
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]   # from @BotFather
-TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]     # your personal chat ID
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 CHECK_INTERVAL_MIN = int(os.getenv("CHECK_INTERVAL_MIN", "60"))  # default hourly
 SEEN_FILE          = Path(os.getenv("SEEN_FILE", "seen_trades.json"))
 
@@ -279,16 +279,47 @@ def main() -> None:
     log.info("Watching %d politicians", len(WATCHLIST))
     log.info("Check interval: every %d minutes", CHECK_INTERVAL_MIN)
 
+    # ── Pre-flight checks ──────────────────────────────────────────────────
+    if not TELEGRAM_BOT_TOKEN:
+        log.critical("TELEGRAM_BOT_TOKEN is not set. Add it in Railway → Variables.")
+        raise SystemExit(1)
+    if not TELEGRAM_CHAT_ID:
+        log.critical("TELEGRAM_CHAT_ID is not set. Add it in Railway → Variables.")
+        raise SystemExit(1)
+
+    log.info("Bot token: %s...%s (length %d)",
+             TELEGRAM_BOT_TOKEN[:8], TELEGRAM_BOT_TOKEN[-4:], len(TELEGRAM_BOT_TOKEN))
+    log.info("Chat ID:   %s", TELEGRAM_CHAT_ID)
+
     # Validate Telegram credentials before starting
     test_url = f"{TG_BASE}/getMe"
     try:
         r = requests.get(test_url, timeout=10)
+        if r.status_code == 401:
+            log.critical("TELEGRAM_BOT_TOKEN is INVALID (401 Unauthorized).")
+            log.critical("Get a fresh token from @BotFather → /newbot or /token")
+            raise SystemExit(1)
         r.raise_for_status()
         bot_name = r.json()["result"]["username"]
         log.info("Telegram bot connected: @%s", bot_name)
+    except SystemExit:
+        raise
     except Exception as exc:
-        log.critical("Telegram bot token is invalid or network error: %s", exc)
+        log.critical("Cannot reach Telegram API: %s", exc)
+        log.critical("Check Railway network settings or try redeploying.")
         raise SystemExit(1)
+
+    # Test-send to catch wrong Chat ID early
+    log.info("Sending test message to chat ID %s...", TELEGRAM_CHAT_ID)
+    ok = send_telegram(
+        "🔧 *Setup test* — if you see this, everything is working correctly.\n\n"
+        "Your Capitol Trade Monitor is about to go live."
+    )
+    if not ok:
+        log.critical("Could not send to TELEGRAM_CHAT_ID=%s", TELEGRAM_CHAT_ID)
+        log.critical("Fix: open Telegram, search your bot username, press START, then redeploy.")
+        raise SystemExit(1)
+    log.info("Test message delivered successfully.")
 
     send_startup_message()
 
